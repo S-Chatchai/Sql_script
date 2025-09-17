@@ -1,5 +1,5 @@
 -- ===============================================
--- Optimized Script (Single Pipeline with CTEs)
+-- Optimized Script Using Only AppScript_V1 + HR_Accum
 -- ===============================================
 
 -- 1) Ensure role_location column exists
@@ -9,7 +9,7 @@ BEGIN
     ADD role_location NVARCHAR(255);
 END;
 
--- 2) Update role_location (keep persisted value)
+-- 2) Update role_location (expensive step; could consider persisted column for large tables)
 UPDATE t
 SET role_location = sub.value
 FROM [INT_MART].[013_mart].[AppScript_V1] t
@@ -27,7 +27,7 @@ CROSS APPLY (
          END
 ) sub;
 
--- 3–7) Final Pipeline
+-- 3–7) Final pipeline
 ;WITH EmailRoles AS (
     SELECT [Type], [Name], [Path], [Editors] AS email, 'Editor' AS role_type, [role_location]
     FROM [INT_MART].[013_mart].[AppScript_V1]
@@ -40,8 +40,13 @@ CROSS APPLY (
 JoinHr AS (
     SELECT b.[Type], b.[Name], b.[Path], b.[email], b.[role_type], b.[role_location], a.*
     FROM EmailRoles b
-    LEFT JOIN [INT_MART].[013_mart].[HR_Accum_Audit] a
-           ON b.email = a.emailid
+    LEFT JOIN (
+        SELECT *
+        FROM [INT_MART].[013_mart].[HR_Accum]
+        -- Optional filter: only include Audit & Small Biz groups
+        WHERE ktb_grp IN (N'Audit', N'สายงานเครือข่ายธุรกิจขนาดเล็กและรายย่อย')
+    ) a
+    ON b.email = a.emailid
 ),
 JoinHrResult AS (
     SELECT j.*,
