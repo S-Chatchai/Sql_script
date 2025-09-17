@@ -1,0 +1,101 @@
+-- ===============================================
+-- Optimized Script (Single Pipeline with CTEs)
+-- ===============================================
+
+-- 1) Ensure role_location column exists
+IF COL_LENGTH('[INT_MART].[013_mart].[AppScript_V1]', 'role_location') IS NULL
+BEGIN
+    ALTER TABLE [INT_MART].[013_mart].[AppScript_V1]
+    ADD role_location NVARCHAR(255);
+END;
+
+-- 2) Update role_location (keep persisted value)
+UPDATE t
+SET role_location = sub.value
+FROM [INT_MART].[013_mart].[AppScript_V1] t
+CROSS APPLY (
+    SELECT TOP 1 value
+    FROM STRING_SPLIT([Path], '/')
+    WHERE value LIKE N'%สาข%'
+       OR value LIKE N'%สำนักงาน%'
+       OR value LIKE N'%กลุ่มเครือข่าย%'
+    ORDER BY 
+         CASE 
+             WHEN value LIKE N'%สาข%' THEN 1
+             WHEN value LIKE N'%สำนักงาน%' THEN 2
+             WHEN value LIKE N'%กลุ่มเครือข่าย%' THEN 3
+         END
+) sub;
+
+-- 3–7) Final Pipeline
+;WITH EmailRoles AS (
+    SELECT [Type], [Name], [Path], [Editors] AS email, 'Editor' AS role_type, [role_location]
+    FROM [INT_MART].[013_mart].[AppScript_V1]
+    WHERE [Editors] IS NOT NULL AND [Editors] <> '' AND [Editors] <> 'ไม่มี'
+    UNION ALL
+    SELECT [Type], [Name], [Path], [Viewers], 'Viewer', [role_location]
+    FROM [INT_MART].[013_mart].[AppScript_V1]
+    WHERE [Viewers] IS NOT NULL AND [Viewers] <> '' AND [Viewers] <> 'ไม่มี'
+),
+JoinHr AS (
+    SELECT b.[Type], b.[Name], b.[Path], b.[email], b.[role_type], b.[role_location], a.*
+    FROM EmailRoles b
+    LEFT JOIN [INT_MART].[013_mart].[HR_Accum_Audit] a
+           ON b.email = a.emailid
+),
+JoinHrResult AS (
+    SELECT j.*,
+           CASE WHEN empe_code IS NULL THEN 'False' ELSE 'True' END AS [status],
+           CASE WHEN email = 'dept.rba@krungthai.com' THEN 'True' ELSE 'False' END AS [Email_Flag],
+           CASE WHEN [Path] LIKE '%' + ktb_rc_nm + '%' THEN 'True' ELSE 'False' END AS [RC_in_Path],
+           CASE WHEN [Path] LIKE '%' + ktb_dept + '%' THEN 'True' ELSE 'False' END AS [Dept_in_Path],
+           CASE WHEN [Path] LIKE '%' + ktb_sctr + '%' THEN 'True' ELSE 'False' END AS [Sctr_in_Path]
+    FROM JoinHr j
+    WHERE [Type] = 'Folder'
+),
+Dedup AS (
+    SELECT *,
+           ROW_NUMBER() OVER (
+               PARTITION BY [Type], [Name], [Path], [email]
+               ORDER BY 
+                   (CASE WHEN [RC_in_Path] = 'True' THEN 1 ELSE 0 END +
+                    CASE WHEN [Dept_in_Path] = 'True' THEN 1 ELSE 0 END +
+                    CASE WHEN [Sctr_in_Path] = 'True' THEN 1 ELSE 0 END) DESC
+           ) AS rn,
+           COUNT(*) OVER (
+               PARTITION BY [Type], [Name], [ktb_field_nm], [Path], [email], [ktb_rc_nm],
+                            [RC_in_Path], [Dept_in_Path], [Sctr_in_Path], [status], [Email_Flag]
+           ) AS DuplicateCount
+    FROM JoinHrResult
+)
+SELECT 
+      [Type]
+     ,[Name]
+     ,[ktb_field_nm]
+     ,[Path]
+     ,[email]
+     ,[ktb_rc_nm]
+     ,[RC_in_Path]
+     ,[Dept_in_Path]
+     ,[Sctr_in_Path]
+     ,[status]
+     ,[Email_Flag]
+     ,DuplicateCount
+     ,CASE WHEN DuplicateCount > 1 THEN 'Duplicate' ELSE 'Unique' END AS [Status_U_D]
+     ,rn
+FROM Dedup
+WHERE rn = 1 
+  AND Email_Flag <> 'True'
+  AND NOT ([RC_in_Path] = 'True' AND [Dept_in_Path] = 'True' AND [Sctr_in_Path] = 'True')
+  AND (ktb_field_nm NOT IN (
+      N'เจ้าหน้าที่ตรวจสอบภายใน',
+      N'เจ้าหน้าที่อาวุโสตรวจสอบภายใน',
+      N'ผู้อำนวยการฝ่าย ตรวจสอบภายใน',
+      N'ผู้อำนวยการฝ่าย ผู้บริหารฝ่าย',
+      N'รองผู้อำนวยการฝ่าย ตรวจสอบภายใน',
+      N'รองผู้อำนวยการฝ่ายสนับสนุนสายงาน',
+      N'หัวหน้าส่วนตรวจสอบภายใน',
+      N'หัวหน้าส่วนสนับสนุนสายงาน'
+  )
+  OR ktb_field_nm IS NULL)
+ORDER BY [RC_in_Path], [Dept_in_Path], [Sctr_in_Path];
