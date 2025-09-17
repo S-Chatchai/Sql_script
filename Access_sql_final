@@ -16,12 +16,12 @@ FROM [INT_MART].[013_mart].[AppScript_V1] t
 CROSS APPLY (
     SELECT TOP 1 value
     FROM STRING_SPLIT([Path], '/')
-    WHERE value LIKE N'%สาข%'
+    WHERE value LIKE N'%สาขา%'
        OR value LIKE N'%สำนักงาน%'
        OR value LIKE N'%กลุ่มเครือข่าย%'
     ORDER BY 
          CASE 
-             WHEN value LIKE N'%สาข%' THEN 1
+             WHEN value LIKE N'%สาขา%' THEN 1
              WHEN value LIKE N'%สำนักงาน%' THEN 2
              WHEN value LIKE N'%กลุ่มเครือข่าย%' THEN 3
          END
